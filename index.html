@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>La vela y la segadora — animación</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  #snd{position:fixed;bottom:10px;left:12px;background:rgba(20,10,30,.6);color:#b98cff;border:1px solid rgba(185,140,255,.35);
+       font:12px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:8px 12px;cursor:pointer;transition:all .4s}
+  #snd:hover{border-color:#b98cff;box-shadow:0 0 12px rgba(160,80,255,.4)}
+  #snd.on{color:#7dffa0;border-color:rgba(125,255,160,.4)}
+  canvas{display:block;width:100vw;height:100vh}
+  #hint{position:fixed;bottom:12px;right:14px;color:#555;font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;user-select:none;transition:opacity 1s}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">click · pausa</div>
+<button id="snd" aria-label="Activar música">♪ sonido</button>
+<script src="music.js"></script>
+<script>
+(() => {
+  const W = 2800, H = 1840;               // coordenadas de la ilustración
+  const WICK = {x: 1361, y: 1072};        // pabilo
+  const CORE = {x: 1360, y: 1030};        // núcleo de la flama
+  const CIRCLE = {x: 1386, y: 929, r: 600};
+  const EYES = [{x: 1458, y: 621}, {x: 1501, y: 616}];
+
+  // píxeles morados del filo de la guadaña [x, y, tamaño]
+  const EDGE = [[1815,416,9],[1838,428,11],[1865,443,15],[1873,459,6],[1882,472,13],[1900,481,15],
+    [1913,504,12],[1922,524,9],[1931,552,14],[1943,575,6],[1950,598,9],[1952,626,3],[1953,635,3]]
+    .map(([x,y,s]) => ({x,y,s, ph: Math.random()*6.28, sp: 1.5+Math.random()*3, flash: 0}));
+  const TIP = {x: 1954, y: 646};
+  const GRID = 10;
+
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const img = new Image();
+  img.src = 'scene.jpg';
+  const flameImg = new Image();
+  flameImg.src = 'flame.png';     // flama recortada (con alfa) de la ilustración
+
+  // capa de flama deformada
+  const FR = {x: 1270, y: 650, w: 220, h: 440};
+  const fcv = document.createElement('canvas'); fcv.width = FR.w; fcv.height = FR.h;
+  const fx = fcv.getContext('2d');
+
+  let scale = 1, ox = 0, oy = 0, dpr = 1;
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+    scale = Math.min(cv.width / W, cv.height / H);
+    ox = (cv.width - W*scale)/2; oy = (cv.height - H*scale)/2;
+  }
+  addEventListener('resize', resize); resize();
+
+  // parpadeo orgánico: suma de senos + ruido suavizado
+  let nz = 0, nzT = 0;
+  function flicker(t){
+    if (Math.random() < 0.04) nzT = (Math.random()-.5)*0.5;
+    nz += (nzT - nz)*0.08;
+    const s = 0.55*Math.sin(t*7.3) + 0.3*Math.sin(t*13.1+1.7) + 0.2*Math.sin(t*2.1+.4) + 0.15*Math.sin(t*23.7);
+    return Math.max(0, Math.min(1, 0.62 + s*0.22 + nz));
+  }
+  const sway = t => 0.7*Math.sin(t*1.3) + 0.3*Math.sin(t*3.7+1) ;
+
+  // ---------- código en el paisaje oscuro ----------
+  const SNIPPETS = [
+    ["// ritual.init()", "const vela = new Flame({", "  hue: 0x9b30ff,", "  wick: 1.0,", "});", "vela.light();"],
+    ["while (soul.breath > 0) {", "  soul.breath -= tick;", "  candle.flicker();", "}", "return 'silencio';"],
+    ["import { tiempo } from 'vacio';", "export function siega(alma) {", "  if (!alma.ora) return;", "  alma.lumen >>= 1;", "  yield* cenizas(alma);", "}"],
+    ["0x7F 0x45 0x4C 0x46 02 01", "00 00 00 00 9B 30 FF 00", "DE AD BE EF 13 00 00 00", "CA FE 66 66 66 0A 0D 0A"],
+    ["$ ./umbral --sync", "> handshake ... ok", "> alma[0] encontrada", "> transfiriendo lumen", "  ████████░░░░ 64%", "> esperando..."],
+    ["fn latido(t: f32) -> f32 {", "  (t * 7.3).sin() * 0.55", "    + (t * 13.1).sin() * 0.3", "}"],
+    ["SELECT * FROM almas", " WHERE oracion IS NOT NULL", "   AND vela = 'encendida'", " ORDER BY tiempo DESC;"],
+    ["<memento mori/>", "  sombra.offset = flama.x", "  luz.radio *= respiro", "  // no hay prisa"],
+    ["git commit -m \"ultima luz\"", "[main 6f3c1a9] ultima luz", " 1 file changed,", " 0 insertions(+)", " 1 deletion(-)"],
+    ["def humo(y):", "    for p in particulas:", "        p.y -= 0.4", "        p.x += sin(y) * 2", "    return morado"],
+  ];
+  const panels = [];
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function freeSpot(w,h){
+    for (let k=0;k<60;k++){
+      const x = rand(40, W-w-40), y = rand(40, H-h-40);
+      const cx = Math.max(x, Math.min(CIRCLE.x, x+w)), cy = Math.max(y, Math.min(CIRCLE.y, y+h));
+      if (Math.hypot(cx-CIRCLE.x, cy-CIRCLE.y) < CIRCLE.r+40) continue;
+      if (x+w > 1700 && x < 2020 && y < 680 && y+h > 300) continue; // guadaña
+      if (panels.some(p => x < p.x+p.w+30 && x+w+30 > p.x && y < p.y+p.h+30 && y+h+30 > p.y)) continue;
+      return {x,y};
+    }
+    return null;
+  }
+  function spawn(t){
+    const lines = SNIPPETS[Math.floor(Math.random()*SNIPPETS.length)];
+    const fs = Math.round(rand(15, 22));
+    const w = Math.max(...lines.map(l=>l.length))*fs*0.61 + 36;
+    const h = lines.length*fs*1.45 + 30;
+    const s = freeSpot(w,h); if (!s) return;
+    const hue = Math.random() < .55 ? 'purple' : (Math.random() < .5 ? 'green' : 'gray');
+    Requiem.code();
+    panels.push({x:s.x, y:s.y, w, h, fs, lines, born:t, speed: rand(22, 48),
+      total: lines.join('').length, hue, life: rand(9, 15)});
+  }
+  const COLORS = { purple:[190,120,255], green:[90,255,140], gray:[200,200,200] };
+  const GLYPHS = '01アイウエオカキクケコ∆∑≠≈§¶#$%&*<>/\\{}[]';
+
+  function drawPanels(t, f){
+    for (let i=panels.length-1;i>=0;i--){
+      const p = panels[i], age = t - p.born;
+      if (age > p.life){ panels.splice(i,1); continue; }
+      const fadeIn = Math.min(1, age/0.6), fadeOut = Math.min(1, (p.life-age)/1.4);
+      const a = fadeIn*fadeOut;
+      // la luz de la vela también alcanza el código, más cerca = más afectado
+      const dist = Math.hypot(p.x+p.w/2-CORE.x, p.y+p.h/2-CORE.y);
+      const lit = 0.55 + 0.45*f*Math.max(0.25, 1 - dist/1800);
+      const [r,g,b] = COLORS[p.hue];
+
+      ctx.fillStyle = `rgba(14,12,18,${0.5*a})`;
+      ctx.fillRect(p.x,p.y,p.w,p.h);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${0.18*a*lit})`;
+      ctx.lineWidth = 1.5; ctx.strokeRect(p.x+.5,p.y+.5,p.w-1,p.h-1);
+      // escaneo
+      const sy = p.y + ((age*60) % p.h);
+      ctx.fillStyle = `rgba(${r},${g},${b},${0.06*a})`; ctx.fillRect(p.x, sy, p.w, 3);
+
+      ctx.font = `${p.fs}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+      ctx.textBaseline = 'top';
+      let shown = Math.floor(age*p.speed), cursorDrawn = false;
+      for (let li=0; li<p.lines.length; li++){
+        const line = p.lines[li];
+        const n = Math.min(line.length, shown); shown -= line.length;
+        if (n <= 0 && cursorDrawn) break;
+        let txt = line.slice(0, n);
+        // glitch: un carácter corrupto de vez en cuando
+        if (n > 2 && Math.random() < 0.03){
+          const k = Math.floor(Math.random()*n);
+          txt = txt.slice(0,k) + GLYPHS[Math.floor(Math.random()*GLYPHS.length)] + txt.slice(k+1);
+        }
+        const ty = p.y + 16 + li*p.fs*1.45;
+        ctx.fillStyle = `rgba(${r},${g},${b},${0.62*a*lit})`;
+        ctx.shadowColor = `rgba(${r},${g},${b},${0.6*a})`; ctx.shadowBlur = 8;
+        ctx.fillText(txt, p.x+18, ty);
+        ctx.shadowBlur = 0;
+        if (!cursorDrawn && n < line.length){
+          if (Math.floor(t*3)%2===0){
+            const cx = p.x + 18 + ctx.measureText(txt).width + 2;
+            ctx.fillRect(cx, ty, p.fs*0.55, p.fs);
+          }
+          cursorDrawn = true;
+        }
+      }
+    }
+  }
+
+  // ---------- agua de píxeles en la guadaña ----------
+  const runners = [], drops = [], trail = [];
+  const snap = v => Math.round(v/GRID)*GRID;
+  // longitud acumulada del filo para que los píxeles escurran hacia la punta
+  const path = EDGE.map(e=>({x:e.x,y:e.y})).concat([TIP]);
+  const segLen = [], cum = [0];
+  for (let i=1;i<path.length;i++){ const L = Math.hypot(path[i].x-path[i-1].x, path[i].y-path[i-1].y); segLen.push(L); cum.push(cum[i-1]+L); }
+  const total = cum[cum.length-1];
+  function along(d){
+    let i = 1; while (i < cum.length-1 && cum[i] < d) i++;
+    const u = Math.min(1, Math.max(0, (d-cum[i-1])/segLen[i-1]));
+    return {x: path[i-1].x + (path[i].x-path[i-1].x)*u, y: path[i-1].y + (path[i].y-path[i-1].y)*u};
+  }
+  function newDrop(x, y, size){ drops.push({x, y, floor: 1350 + Math.random()*350, vy: 0, vx: (Math.random()-.5)*0.4, size, hang: 0.25+Math.random()*0.7, age: 0, lastY: snap(y)}); }
+
+  function px(x, y, size, a, hue){
+    const c = hue === 1 ? `rgba(220,90,255,${a})` : hue === 2 ? `rgba(150,60,255,${a})` : `rgba(190,70,255,${a})`;
+    ctx.fillStyle = c;
+    ctx.fillRect(Math.round(x - size/2), Math.round(y - size/2), size, size);
+  }
+
+  function drawBlade(t, dt, f){
+    if (paused) dt = 0;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.imageSmoothingEnabled = false;
+
+    // 1. parpadeo de cada píxel del filo
+    EDGE.forEach((e, i) => {
+      if (dt && Math.random() < 0.006) e.flash = 1;
+      e.flash *= 0.9;
+      const tw = 0.5 + 0.5*Math.sin(t*e.sp + e.ph);
+      const a = 0.15 + 0.45*tw*tw + 0.6*e.flash + 0.15*f;
+      const g = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.s*2.6);
+      g.addColorStop(0, `rgba(200,80,255,${a*0.55})`); g.addColorStop(1, 'rgba(140,40,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(e.x-e.s*3, e.y-e.s*3, e.s*6, e.s*6);
+      px(e.x, e.y, e.s, Math.min(1, a), i % 3);
+      if (e.flash > 0.4) px(e.x, e.y, Math.max(2, e.s*0.4), e.flash, 1);
+    });
+
+    // 2. píxeles que escurren por el filo hacia la punta
+    if (dt && Math.random() < 0.035) runners.push({d: Math.random()*total*0.6, v: 25+Math.random()*40, size: GRID - (Math.random()<.5?3:0)});
+    for (let i=runners.length-1;i>=0;i--){
+      const r = runners[i];
+      r.v += 60*dt; r.d += r.v*dt;
+      const p = along(r.d);
+      const qx = snap(p.x), qy = snap(p.y);
+      if (qx !== r.qx || qy !== r.qy){ trail.push({x:qx, y:qy, size:r.size-3, a:0.45}); r.qx = qx; r.qy = qy; }
+      px(qx, qy, r.size, 0.95, 1);
+      if (r.d >= total){ newDrop(TIP.x, TIP.y, r.size); runners.splice(i,1); }
+    }
+
+    // 3. gotas que se forman bajo el filo y caen píxel por píxel
+    if (dt && Math.random() < 0.025){
+      const e = EDGE[Math.floor(Math.random()*EDGE.length)];
+      newDrop(e.x, e.y + e.s*0.5, Math.max(7, Math.min(GRID+2, e.s*0.8)));
+    }
+    for (let i=drops.length-1;i>=0;i--){
+      const d = drops[i];
+      d.age += dt;
+      let size = d.size, y = d.y;
+      if (d.age < d.hang){                       // la gota se hincha colgando
+        const k = d.age/d.hang;
+        size = Math.max(2, d.size*k);
+        y = d.y + k*GRID;
+        px(snap(d.x), snap(y), Math.round(size), 0.9, 0);
+        continue;
+      }
+      d.vy += 900*dt; d.y += d.vy*dt; d.x += d.vx;
+      const qx = snap(d.x), qy = snap(d.y);
+      while (d.lastY < qy){ d.lastY += GRID; d.n = (d.n||0)+1; if (d.n % 3 === 0) trail.push({x:qx, y:d.lastY, size: Math.max(3, d.size-4), a: 0.55}); }
+      px(qx, qy, d.size, 1, 1);
+      px(qx, qy - GRID, d.size-2, 0.5, 2);
+      if (d.y > d.floor || d.y > 1760){
+        for (let k=0;k<4;k++) trail.push({x: qx + (k-1.5)*GRID*1.4, y: qy - GRID*(k%2), size: 5, a: 0.8, vy: -2-Math.random()*2, vx:(k-1.5)*0.8});
+        Requiem.drip(qx, qy);
+        drops.splice(i,1);
+      }
+    }
+
+    // 4. estela: píxeles que se apagan uno a uno
+    for (let i=trail.length-1;i>=0;i--){
+      const p = trail[i];
+      if (p.vy !== undefined && dt){ p.vy += 0.25; p.y += p.vy; p.x += p.vx; }
+      p.a -= dt*(p.vy !== undefined ? 1.3 : 2.4);
+      if (p.a <= 0){ trail.splice(i,1); continue; }
+      px(p.x, p.y, p.size, p.a, 2);
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- humo morado ----------
+  const smoke = [];
+  function emitSmoke(sw){
+    smoke.push({x: CORE.x + rand(-6,6) + sw*6, y: CORE.y - 60, vy: rand(.6,1.3), ph: rand(0,6.28), r: rand(10,22), life: 0, max: rand(220, 340)});
+  }
+
+  let paused = false, last = performance.now(), T = 0, nextSpawn = 0;
+  const snd = document.getElementById('snd');
+  snd.addEventListener('click', e => { e.stopPropagation(); try { const on = Requiem.toggle();
+    snd.classList.toggle('on', on); snd.textContent = on ? '♪ silencio' : '♪ sonido'; } catch(err){} });
+  cv.addEventListener('click', () => { paused = !paused; try { Requiem.freeze(paused); } catch(e){} document.getElementById('hint').style.opacity = paused ? 1 : .35; });
+  setTimeout(()=>document.getElementById('hint').style.opacity=.35, 2500);
+
+  function frame(now){
+    const dt = Math.min(0.05, (now-last)/1000); last = now;
+    if (!paused) T += dt;
+    const t = T;
+    const f = flicker(t), sw = sway(t);
+    if (!paused) Requiem.flame(f);
+
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0,0,cv.width,cv.height);
+    ctx.setTransform(scale,0,0,scale,ox,oy);
+    ctx.drawImage(img, 0, 0, W, H);
+
+
+    // ---- flama: deformación de la propia ilustración ----
+    fx.clearRect(0,0,FR.w,FR.h);
+    const stretch = 0.92 + f*0.18;
+    for (let y=0; y<FR.h; y+=1){
+      const wy = FR.y + y;
+      const h = Math.max(0, WICK.y - wy);              // altura sobre el pabilo
+      const k = Math.min(1, h/380);
+      const dx = (Math.sin(t*4.2 - h*0.025) * 11 + Math.sin(t*9.1 - h*0.06)*3) * k*k + sw*16*k;
+      const sy = wy > WICK.y ? wy : WICK.y - h/stretch; // estirar desde el pabilo
+      const ly = sy - FR.y;
+      if (ly < 0 || ly >= FR.h) continue;
+      fx.drawImage(flameImg, 0, ly, FR.w, 1, dx, y, FR.w, 1);
+    }
+    ctx.drawImage(fcv, FR.x, FR.y);
+
+    // ---- humo morado ascendente ----
+    if (!paused && Math.random() < 0.5) emitSmoke(sw);
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i=smoke.length-1;i>=0;i--){
+      const s = smoke[i];
+      if (!paused){ s.life++; s.y -= s.vy; s.x += Math.sin(s.ph + s.life*0.04)*0.9 + sw*0.3; s.r += 0.12; }
+      if (s.life > s.max){ smoke.splice(i,1); continue; }
+      const a = Math.sin(Math.PI * s.life/s.max) * 0.10;
+      const g = ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r);
+      g.addColorStop(0, `rgba(170,60,255,${a})`); g.addColorStop(1,'rgba(120,20,200,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,6.283); ctx.fill();
+    }
+
+    // ---- núcleo brillante ----
+    const lx = CORE.x + sw*8, ly = CORE.y - 6;
+    let g = ctx.createRadialGradient(lx, ly, 0, lx, ly, 60 + f*30);
+    g.addColorStop(0, `rgba(255,235,190,${0.55*f})`);
+    g.addColorStop(0.35, `rgba(255,120,60,${0.35*f})`);
+    g.addColorStop(1, 'rgba(255,60,40,0)');
+    ctx.fillStyle = g; ctx.fillRect(lx-120, ly-120, 240, 240);
+
+    // ---- luz cálida/morada que respira ----
+    const R = 520 + f*260;
+    g = ctx.createRadialGradient(lx, ly-40, 0, lx, ly-40, R);
+    g.addColorStop(0, `rgba(255,140,70,${0.16 + f*0.14})`);
+    g.addColorStop(0.35, `rgba(160,60,255,${0.06 + f*0.08})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(lx-R, ly-40-R, R*2, R*2);
+
+    // ojos de la muerte: brillan con la flama
+    EYES.forEach((e,i) => {
+      const ea = 0.25 + 0.45*f + 0.15*Math.sin(t*5 + i);
+      const eg = ctx.createRadialGradient(e.x,e.y,0,e.x,e.y,26);
+      eg.addColorStop(0, `rgba(80,255,120,${ea})`); eg.addColorStop(1,'rgba(80,255,120,0)');
+      ctx.fillStyle = eg; ctx.fillRect(e.x-26,e.y-26,52,52);
+    });
+    ctx.globalCompositeOperation = 'source-over';
+
+    // ---- sombras: oscuridad que se mueve opuesta a la flama ----
+    const shx = lx - sw*70, shy = ly - 80;
+    const inner = 260 + f*170, outer = 1250 + f*220;
+    g = ctx.createRadialGradient(shx, shy, inner, shx, shy, outer);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.55, `rgba(0,0,0,${0.42 - f*0.18})`);
+    g.addColorStop(1, `rgba(0,0,0,${0.82 - f*0.15})`);
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+    // sombra proyectada de cada figura hacia afuera
+    [[1050, 960, -1], [1720, 930, 1]].forEach(([sx, sy, dir]) => {
+      const off = dir*(40 + f*30) - sw*35;
+      const sg = ctx.createRadialGradient(sx+off, sy, 40, sx+off, sy, 380);
+      sg.addColorStop(0, `rgba(0,0,0,${0.22 - f*0.12})`); sg.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = sg; ctx.fillRect(sx+off-380, sy-380, 760, 760);
+    });
+
+    // ---- filo de la guadaña: píxeles que brillan y gotean ----
+    drawBlade(t, dt, f);
+
+    // ---- código configurándose en el paisaje oscuro ----
+    if (!paused && t > nextSpawn){ spawn(t); nextSpawn = t + rand(0.5, 1.6); }
+    drawPanels(t, f);
+
+    requestAnimationFrame(frame);
+  }
+  let loaded = 0; const go = () => { if (++loaded === 2) requestAnimationFrame(frame); };
+  img.onload = go; flameImg.onload = go;
+})();
+</script>
+</body>
+</html>
