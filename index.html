@@ -10,7 +10,7 @@
        font:12px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:8px 12px;cursor:pointer;transition:all .4s}
   #snd:hover{border-color:#b98cff;box-shadow:0 0 12px rgba(160,80,255,.4)}
   #snd.on{color:#7dffa0;border-color:rgba(125,255,160,.4)}
-  canvas{display:block;width:100vw;height:100vh}
+  canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%}
   #hint{position:fixed;bottom:12px;right:14px;color:#555;font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;user-select:none;transition:opacity 1s}
 </style>
 </head>
@@ -47,13 +47,21 @@
   const fx = fcv.getContext('2d');
 
   let scale = 1, ox = 0, oy = 0, dpr = 1;
+  // El lienzo se mide por su tamaño real en pantalla (no por 100vh, que en móviles
+  // incluye la barra del navegador): así la ilustración nunca se estira ni se aplasta.
   function resize(){
     dpr = Math.min(window.devicePixelRatio || 1, 2);
-    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
-    scale = Math.min(cv.width / W, cv.height / H);
+    const cw = cv.clientWidth || innerWidth, ch = cv.clientHeight || innerHeight;
+    const bw = Math.round(cw * dpr), bh = Math.round(ch * dpr);
+    if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
+    scale = Math.min(cv.width / W, cv.height / H);   // "contener": cabe entera, sin deformarse
     ox = (cv.width - W*scale)/2; oy = (cv.height - H*scale)/2;
   }
-  addEventListener('resize', resize); resize();
+  addEventListener('resize', resize);
+  addEventListener('orientationchange', () => setTimeout(resize, 200));
+  if (window.visualViewport) visualViewport.addEventListener('resize', resize);
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(cv);
+  resize();
 
   // parpadeo orgánico: suma de senos + ruido suavizado
   let nz = 0, nzT = 0;
